@@ -21,7 +21,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install feedparser openai==0.28.1 python-dateutil
+        pip install feedparser google-generativeai python-dateutil
         
     - name: Run news aggregator
       env:
