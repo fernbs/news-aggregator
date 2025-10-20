@@ -1,5 +1,5 @@
 import feedparser
-import openai
+import google.generativeai as genai
 import smtplib
 import ssl
 from email.mime.text import MIMEText
@@ -7,22 +7,39 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 import os
 import time
-import re
+import hashlib
 
-# Configuration
-RSS_FEEDS = [
+# ============================================
+# CONFIGURATION - CHOOSE YOUR STRATEGY HERE
+# ============================================
+
+# Strategy choice: "limit_articles", "limit_feeds", or "deduplicate"
+STRATEGY = "limit_articles"  # Change this to test different strategies
+
+# Strategy 1: Limit articles per day
+MAX_ARTICLES_PER_DAY = 15
+
+# Strategy 2: Reduce number of feeds
+RSS_FEEDS_ALL = [
     'https://www.theprp.com/feed',
     'https://www.nytimes.com/services/xml/rss/nyt/HomePage.xml',
     'https://www.robotitus.com/feed/',
-    'https://www.europapress.es/rss/rss.aspx?ch=298',
     'https://www.guardian.co.uk/technology/artificialintelligenceai/rss',
     'https://www.eldiario.es/rss/',
     'https://www.iflscience.com/rss/ifls-latest-rss.xml',
     'https://futurism.com/feed',
-    'https://maldita.es/feed/',
-    'https://feeds.feedburner.com/trendwatching',
-    'https://www.huffpost.com/section/front-page/feed'
+    'https://maldita.es/feed/'
 ]
+
+# For Strategy 2: Only use first 5 feeds
+RSS_FEEDS_LIMITED = RSS_FEEDS_ALL[:5]
+
+# For other strategies: Use all feeds
+RSS_FEEDS = RSS_FEEDS_LIMITED if STRATEGY == "limit_feeds" else RSS_FEEDS_ALL
+
+# ============================================
+# END CONFIGURATION
+# ============================================
 
 def get_recent_articles():
     """Get articles from the last 24 hours"""
@@ -35,14 +52,13 @@ def get_recent_articles():
             feed = feedparser.parse(feed_url)
             
             for entry in feed.entries:
-                # Try to parse the publication date
                 try:
                     if hasattr(entry, 'published_parsed') and entry.published_parsed:
                         pub_date = datetime(*entry.published_parsed[:6])
                     elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
                         pub_date = datetime(*entry.updated_parsed[:6])
                     else:
-                        continue  # Skip if no date available
+                        continue
                     
                     if pub_date > cutoff_time:
                         article = {
@@ -62,60 +78,88 @@ def get_recent_articles():
             print(f"Error fetching {feed_url}: {e}")
             continue
     
+    articles.sort(key=lambda x: x['date'], reverse=True)
+    return articles
+
+def remove_duplicate_articles(articles):
+    """Remove duplicate articles based on similar titles"""
+    seen = {}
+    unique_articles = []
+    
+    for article in articles:
+        # Create a hash of the title (normalized)
+        title_hash = hashlib.md5(article['title'].lower().strip().encode()).hexdigest()
+        
+        if title_hash not in seen:
+            seen[title_hash] = True
+            unique_articles.append(article)
+        else:
+            print(f"Skipping duplicate: {article['title']}")
+    
+    return unique_articles
+
+def apply_strategy(articles):
+    """Apply the selected strategy to articles"""
+    
+    if STRATEGY == "limit_articles":
+        print(f"\nStrategy: LIMIT ARTICLES")
+        print(f"Processing max {MAX_ARTICLES_PER_DAY} articles")
+        return articles[:MAX_ARTICLES_PER_DAY]
+    
+    elif STRATEGY == "limit_feeds":
+        print(f"\nStrategy: LIMIT FEEDS")
+        print(f"Using only {len(RSS_FEEDS)} feeds (reduced from {len(RSS_FEEDS_ALL)})")
+        return articles[:20]  # Still limit to avoid API overload
+    
+    elif STRATEGY == "deduplicate":
+        print(f"\nStrategy: DEDUPLICATE + LIMIT")
+        print(f"Found {len(articles)} total articles")
+        unique = remove_duplicate_articles(articles)
+        print(f"After deduplication: {len(unique)} unique articles")
+        return unique[:MAX_ARTICLES_PER_DAY]
+    
     return articles
 
 def summarize_article(article):
-    """Summarize article using ChatGPT API"""
+    """Summarize article using Google Gemini"""
     try:
-        # Set up OpenAI client
-        openai.api_key = os.getenv('OPENAI_API_KEY')
+        genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
-        prompt = f"""
-        Resumir el siguiente artículo de noticias en español con 6-8 frases. 
-        Incluir todos los detalles importantes y datos clave.
-        Si el artículo está en inglés, traducir y resumir en español.
+        content = article['description'][:800]
         
-        Título: {article['title']}
-        Contenido: {article['description']}
-        Fuente: {article['source']}
-        """
+        prompt = f"""Resume este artículo de noticias en español en 4-5 puntos clave. 
+Sé conciso pero completo.
+
+Título: {article['title']}
+Contenido: {content}"""
         
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "Eres un periodista experto que crea resúmenes concisos pero completos de noticias en español."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=200,
-            temperature=0.3
-        )
-        
-        return response.choices[0].message.content.strip()
+        response = model.generate_content(prompt)
+        return response.text.strip()
         
     except Exception as e:
         print(f"Error summarizing article: {e}")
-        return f"Error al resumir: {article['title']}"
+        return f"No se pudo resumir: {article['title']}"
 
-def send_email(summaries):
+def send_email(summaries, strategy_info):
     """Send email with news summaries"""
     try:
         sender_email = os.getenv('GMAIL_EMAIL')
         sender_password = os.getenv('GMAIL_PASSWORD')
         recipient_email = os.getenv('RECIPIENT_EMAIL')
         
-        # Create message
         message = MIMEMultipart()
         message["From"] = sender_email
         message["To"] = recipient_email
         message["Subject"] = f"Resumen Diario de Noticias - {datetime.now().strftime('%d/%m/%Y')}"
         
-        # Create email body
         body = f"""
         <html>
         <body>
         <h2>Resumen Diario de Noticias</h2>
         <p><strong>Fecha:</strong> {datetime.now().strftime('%d de %B de %Y')}</p>
-        <p><strong>Artículos encontrados:</strong> {len(summaries)}</p>
+        <p><strong>Estrategia:</strong> {strategy_info}</p>
+        <p><strong>Artículos resumidos:</strong> {len(summaries)}</p>
         <hr>
         """
         
@@ -136,7 +180,6 @@ def send_email(summaries):
         
         message.attach(MIMEText(body, "html"))
         
-        # Send email
         context = ssl.create_default_context()
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
             server.login(sender_email, sender_password)
@@ -149,20 +192,26 @@ def send_email(summaries):
 
 def main():
     """Main function"""
-    print("Starting news aggregation...")
+    print("Starting news aggregation with Google Gemini...")
     
-    # Get recent articles
     articles = get_recent_articles()
-    print(f"Found {len(articles)} recent articles")
+    print(f"\nTotal articles found: {len(articles)}")
     
     if not articles:
         print("No recent articles found")
         return
     
-    # Summarize articles
+    # Apply selected strategy
+    filtered_articles = apply_strategy(articles)
+    print(f"Articles to summarize: {len(filtered_articles)}\n")
+    
+    if not filtered_articles:
+        print("No articles to process after applying strategy")
+        return
+    
     summaries = []
-    for article in articles:
-        print(f"Summarizing: {article['title']}")
+    for idx, article in enumerate(filtered_articles, 1):
+        print(f"[{idx}/{len(filtered_articles)}] Summarizing: {article['title'][:60]}...")
         summary = summarize_article(article)
         
         summaries.append({
@@ -173,11 +222,11 @@ def main():
             'link': article['link']
         })
         
-        time.sleep(1)  # Rate limiting
+        time.sleep(1)
     
-    # Send email
     if summaries:
-        send_email(summaries)
+        strategy_info = f"{STRATEGY.upper()} - {len(filtered_articles)} articles"
+        send_email(summaries, strategy_info)
     else:
         print("No summaries to send")
 
