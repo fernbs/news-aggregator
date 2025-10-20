@@ -127,7 +127,12 @@ def apply_strategy(articles):
 def summarize_article(article):
     """Summarize article using Google Gemini"""
     try:
-        genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
+        api_key = os.getenv('GEMINI_API_KEY')
+        if not api_key:
+            print("ERROR: GEMINI_API_KEY not found in environment variables!")
+            return f"ERROR: API key no configurado"
+        
+        genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-1.5-flash')
         
         content = article['description'][:800]
@@ -142,7 +147,7 @@ Contenido: {content}"""
         return response.text.strip()
         
     except Exception as e:
-        print(f"Error summarizing article: {e}")
+        print(f"Error summarizing article: {type(e).__name__}: {e}")
         return f"No se pudo resumir: {article['title']}"
 
 def send_email(summaries, strategy_info):
