@@ -16,8 +16,8 @@ import hashlib
 # Strategy choice: "limit_articles", "limit_feeds", or "deduplicate"
 STRATEGY = "limit_articles"  # Change this to test different strategies
 
-# Strategy 1: Limit articles per day
-MAX_ARTICLES_PER_DAY = 15
+# Strategy 1: Limit articles per day (set to None for unlimited)
+MAX_ARTICLES_PER_DAY = None  # Set to a number like 15 if you want a limit, None for unlimited
 
 # Strategy 2: Reduce number of feeds
 RSS_FEEDS_ALL = [
@@ -103,8 +103,12 @@ def apply_strategy(articles):
     
     if STRATEGY == "limit_articles":
         print(f"\nStrategy: LIMIT ARTICLES")
-        print(f"Processing max {MAX_ARTICLES_PER_DAY} articles")
-        return articles[:MAX_ARTICLES_PER_DAY]
+        if MAX_ARTICLES_PER_DAY is not None:
+            print(f"Processing max {MAX_ARTICLES_PER_DAY} articles")
+            return articles[:MAX_ARTICLES_PER_DAY]
+        else:
+            print(f"Processing ALL {len(articles)} articles (unlimited)")
+            return articles
     
     elif STRATEGY == "limit_feeds":
         print(f"\nStrategy: LIMIT FEEDS")
