@@ -128,8 +128,6 @@ def summarize_article(article):
     """Summarize article using Google Gemini"""
     try:
         api_key = os.getenv('GEMINI_API_KEY')
-        print(f"DEBUG: API Key exists: {bool(api_key)}")
-        print(f"DEBUG: API Key length: {len(api_key) if api_key else 0}")
         
         if not api_key:
             print("ERROR: GEMINI_API_KEY not found in environment variables!")
@@ -138,14 +136,13 @@ def summarize_article(article):
         # Check if article has content
         content = article['description'][:800]
         if not content or len(content.strip()) < 20:
-            print(f"Warning: Article has no/minimal content: {article['title'][:50]}")
+            print(f"Warning: Article has no/minimal content")
             return f"No hay contenido disponible para resumir"
         
-        print(f"DEBUG: Configuring Gemini API...")
         genai.configure(api_key=api_key)
         
-        print(f"DEBUG: Creating model...")
-        model = genai.GenerativeModel('gemini-pro')
+        # Use the correct model name for Gemini API
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
         prompt = f"""Resume este artículo de noticias en español en 4-5 puntos clave. 
 Sé conciso pero completo.
@@ -153,17 +150,11 @@ Sé conciso pero completo.
 Título: {article['title']}
 Contenido: {content}"""
         
-        print(f"DEBUG: Generating content...")
         response = model.generate_content(prompt)
-        print(f"DEBUG: Response received successfully")
         return response.text.strip()
         
     except Exception as e:
-        import traceback
-        print(f"ERROR DETAILS:")
-        print(f"  Type: {type(e).__name__}")
-        print(f"  Message: {str(e)}")
-        print(f"  Traceback: {traceback.format_exc()}")
+        print(f"Error summarizing article: {type(e).__name__}: {str(e)}")
         return f"Error: {type(e).__name__} - {str(e)}"
 
 def send_email(summaries, strategy_info):
