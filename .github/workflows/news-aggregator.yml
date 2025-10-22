@@ -25,8 +25,8 @@ jobs:
         
     - name: Run news aggregator
       env:
-       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-       GMAIL_EMAIL: ${{ secrets.GMAIL_EMAIL }}
-       GMAIL_PASSWORD: ${{ secrets.GMAIL_PASSWORD }}
-       RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
-     run: python news_aggregator.py
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        GMAIL_EMAIL: ${{ secrets.GMAIL_EMAIL }}
+        GMAIL_PASSWORD: ${{ secrets.GMAIL_PASSWORD }}
+        RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+      run: python news_aggregator.py
