@@ -21,11 +21,11 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install feedparser google-generativeai python-dateutil
+        pip install feedparser requests python-dateutil
         
     - name: Run news aggregator
       env:
-        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        HUGGINGFACE_API_KEY: ${{ secrets.HUGGINGFACE_API_KEY }}
         GMAIL_EMAIL: ${{ secrets.GMAIL_EMAIL }}
         GMAIL_PASSWORD: ${{ secrets.GMAIL_PASSWORD }}
         RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
