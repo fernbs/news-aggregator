@@ -1,5 +1,5 @@
 import feedparser
-import google.generativeai as genai
+import requests
 import smtplib
 import ssl
 from email.mime.text import MIMEText
@@ -7,20 +7,10 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 import os
 import time
-import hashlib
+import json
 
-# ============================================
-# CONFIGURATION - CHOOSE YOUR STRATEGY HERE
-# ============================================
-
-# Strategy choice: "limit_articles", "limit_feeds", or "deduplicate"
-STRATEGY = "limit_articles"  # Change this to test different strategies
-
-# Strategy 1: Limit articles per day (set to None for unlimited)
-MAX_ARTICLES_PER_DAY = None  # Set to a number like 15 if you want a limit, None for unlimited
-
-# Strategy 2: Reduce number of feeds
-RSS_FEEDS_ALL = [
+# CONFIGURATION
+RSS_FEEDS = [
     'https://www.theprp.com/feed',
     'https://www.nytimes.com/services/xml/rss/nyt/HomePage.xml',
     'https://www.robotitus.com/feed/',
@@ -28,18 +18,14 @@ RSS_FEEDS_ALL = [
     'https://www.eldiario.es/rss/',
     'https://www.iflscience.com/rss/ifls-latest-rss.xml',
     'https://futurism.com/feed',
-    'https://maldita.es/feed/'
+    'https://maldita.es/feed/',
+    'https://www.europapress.es/rss/rss.aspx?ch=298',
+    'https://www.europapress.es/rss/rss.aspx?ch=66',
+    'https://www.europapress.es/rss/rss.aspx?ch=69'
 ]
 
-# For Strategy 2: Only use first 5 feeds
-RSS_FEEDS_LIMITED = RSS_FEEDS_ALL[:5]
-
-# For other strategies: Use all feeds
-RSS_FEEDS = RSS_FEEDS_LIMITED if STRATEGY == "limit_feeds" else RSS_FEEDS_ALL
-
-# ============================================
-# END CONFIGURATION
-# ============================================
+# Hugging Face API endpoint
+HF_API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-cnn"
 
 def get_recent_articles():
     """Get articles from the last 24 hours"""
@@ -71,7 +57,6 @@ def get_recent_articles():
                         articles.append(article)
                         
                 except Exception as e:
-                    print(f"Error processing article: {e}")
                     continue
                     
         except Exception as e:
@@ -81,83 +66,87 @@ def get_recent_articles():
     articles.sort(key=lambda x: x['date'], reverse=True)
     return articles
 
-def remove_duplicate_articles(articles):
-    """Remove duplicate articles based on similar titles"""
-    seen = {}
-    unique_articles = []
+def summarize_with_huggingface(text, api_key):
+    """Summarize text using Hugging Face API"""
+    headers = {"Authorization": f"Bearer {api_key}"}
     
-    for article in articles:
-        # Create a hash of the title (normalized)
-        title_hash = hashlib.md5(article['title'].lower().strip().encode()).hexdigest()
-        
-        if title_hash not in seen:
-            seen[title_hash] = True
-            unique_articles.append(article)
-        else:
-            print(f"Skipping duplicate: {article['title']}")
+    # Limit text length for API
+    text = text[:1000]
     
-    return unique_articles
-
-def apply_strategy(articles):
-    """Apply the selected strategy to articles"""
+    payload = {
+        "inputs": text,
+        "parameters": {
+            "max_length": 130,
+            "min_length": 30,
+            "do_sample": False
+        }
+    }
     
-    if STRATEGY == "limit_articles":
-        print(f"\nStrategy: LIMIT ARTICLES")
-        if MAX_ARTICLES_PER_DAY is not None:
-            print(f"Processing max {MAX_ARTICLES_PER_DAY} articles")
-            return articles[:MAX_ARTICLES_PER_DAY]
-        else:
-            print(f"Processing ALL {len(articles)} articles (unlimited)")
-            return articles
-    
-    elif STRATEGY == "limit_feeds":
-        print(f"\nStrategy: LIMIT FEEDS")
-        print(f"Using only {len(RSS_FEEDS)} feeds (reduced from {len(RSS_FEEDS_ALL)})")
-        return articles[:20]  # Still limit to avoid API overload
-    
-    elif STRATEGY == "deduplicate":
-        print(f"\nStrategy: DEDUPLICATE + LIMIT")
-        print(f"Found {len(articles)} total articles")
-        unique = remove_duplicate_articles(articles)
-        print(f"After deduplication: {len(unique)} unique articles")
-        return unique[:MAX_ARTICLES_PER_DAY]
-    
-    return articles
-
-def summarize_article(article):
-    """Summarize article using Google Gemini"""
     try:
-        api_key = os.getenv('GEMINI_API_KEY')
+        response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=30)
         
-        if not api_key:
-            print("ERROR: GEMINI_API_KEY not found in environment variables!")
-            return f"ERROR: API key no configurado"
+        if response.status_code == 200:
+            result = response.json()
+            if isinstance(result, list) and len(result) > 0:
+                return result[0].get('summary_text', '')
+        elif response.status_code == 503:
+            # Model is loading, wait and retry
+            print("Model loading, waiting 20 seconds...")
+            time.sleep(20)
+            response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=30)
+            if response.status_code == 200:
+                result = response.json()
+                if isinstance(result, list) and len(result) > 0:
+                    return result[0].get('summary_text', '')
         
-        # Check if article has content
-        content = article['description'][:800]
-        if not content or len(content.strip()) < 20:
-            print(f"Warning: Article has no/minimal content")
-            return f"No hay contenido disponible para resumir"
-        
-        genai.configure(api_key=api_key)
-        
-        # Use the correct model name for Gemini API
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        
-        prompt = f"""Resume este artículo de noticias en español en 4-5 puntos clave. 
-Sé conciso pero completo.
-
-Título: {article['title']}
-Contenido: {content}"""
-        
-        response = model.generate_content(prompt)
-        return response.text.strip()
+        print(f"API Error: {response.status_code} - {response.text}")
+        return None
         
     except Exception as e:
-        print(f"Error summarizing article: {type(e).__name__}: {str(e)}")
-        return f"Error: {type(e).__name__} - {str(e)}"
+        print(f"Request error: {e}")
+        return None
 
-def send_email(summaries, strategy_info):
+def translate_to_spanish(text):
+    """Simple translation prompting (returns English summary with Spanish note)"""
+    # Since we're using a free API, we'll return English summaries
+    # You could add a translation step here if needed
+    return text
+
+def summarize_article(article):
+    """Summarize article using Hugging Face"""
+    try:
+        api_key = os.getenv('HUGGINGFACE_API_KEY')
+        
+        if not api_key:
+            print("ERROR: HUGGINGFACE_API_KEY not found!")
+            return "ERROR: API key no configurado"
+        
+        # Get content
+        content = article.get('description', article['title'])
+        if not content or len(content.strip()) < 20:
+            return "No hay contenido disponible"
+        
+        # Clean HTML tags if present
+        import re
+        content = re.sub('<[^<]+?>', '', content)
+        
+        # Combine title and content for better context
+        full_text = f"{article['title']}. {content}"
+        
+        # Get summary from Hugging Face
+        summary = summarize_with_huggingface(full_text, api_key)
+        
+        if summary:
+            # Add Spanish prefix since summary will be in English
+            return f"[Resumen en inglés] {summary}"
+        else:
+            return "No se pudo generar resumen"
+        
+    except Exception as e:
+        print(f"Error summarizing: {e}")
+        return f"Error: {str(e)}"
+
+def send_email(summaries):
     """Send email with news summaries"""
     try:
         sender_email = os.getenv('GMAIL_EMAIL')
@@ -174,8 +163,8 @@ def send_email(summaries, strategy_info):
         <body>
         <h2>Resumen Diario de Noticias</h2>
         <p><strong>Fecha:</strong> {datetime.now().strftime('%d de %B de %Y')}</p>
-        <p><strong>Estrategia:</strong> {strategy_info}</p>
         <p><strong>Artículos resumidos:</strong> {len(summaries)}</p>
+        <p><em>Nota: Los resúmenes están en inglés (limitación de la API gratuita)</em></p>
         <hr>
         """
         
@@ -208,7 +197,7 @@ def send_email(summaries, strategy_info):
 
 def main():
     """Main function"""
-    print("Starting news aggregation with Google Gemini...")
+    print("Starting news aggregation with Hugging Face...")
     
     articles = get_recent_articles()
     print(f"\nTotal articles found: {len(articles)}")
@@ -217,32 +206,32 @@ def main():
         print("No recent articles found")
         return
     
-    # Apply selected strategy
-    filtered_articles = apply_strategy(articles)
-    print(f"Articles to summarize: {len(filtered_articles)}\n")
-    
-    if not filtered_articles:
-        print("No articles to process after applying strategy")
-        return
+    print(f"Articles to summarize: {len(articles)}\n")
     
     summaries = []
-    for idx, article in enumerate(filtered_articles, 1):
-        print(f"[{idx}/{len(filtered_articles)}] Summarizing: {article['title'][:60]}...")
+    successful = 0
+    
+    for idx, article in enumerate(articles, 1):
+        print(f"[{idx}/{len(articles)}] Summarizing: {article['title'][:60]}...")
         summary = summarize_article(article)
         
-        summaries.append({
-            'title': article['title'],
-            'source': article['source'],
-            'date': article['date'],
-            'summary': summary,
-            'link': article['link']
-        })
+        if summary and "ERROR" not in summary and "No se pudo" not in summary:
+            summaries.append({
+                'title': article['title'],
+                'source': article['source'],
+                'date': article['date'],
+                'summary': summary,
+                'link': article['link']
+            })
+            successful += 1
         
-        time.sleep(1)
+        # Rate limiting - Hugging Face free tier has limits
+        time.sleep(2)
+    
+    print(f"\nSuccessfully summarized: {successful}/{len(articles)}")
     
     if summaries:
-        strategy_info = f"{STRATEGY.upper()} - {len(filtered_articles)} articles"
-        send_email(summaries, strategy_info)
+        send_email(summaries)
     else:
         print("No summaries to send")
 
