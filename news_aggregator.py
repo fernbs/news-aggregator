@@ -12,7 +12,6 @@ import json
 # CONFIGURATION
 RSS_FEEDS = [
     'https://www.theprp.com/feed',
-    'https://www.nytimes.com/services/xml/rss/nyt/HomePage.xml',
     'https://www.robotitus.com/feed/',
     'https://www.guardian.co.uk/technology/artificialintelligenceai/rss',
     'https://www.eldiario.es/rss/',
